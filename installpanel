@@ -1,0 +1,85 @@
+#!/bin/bash
+
+clear
+echo "======================================"
+echo "   DTunnel Panel Auto Installer"
+echo "======================================"
+echo ""
+
+read -p "Dominio (Enter para usar IP): " DOMAIN
+read -p "Email para SSL: " EMAIL
+
+WEBROOT="/var/www/html"
+
+echo "[INFO] Instalando dependencias..."
+
+apt update -y
+apt remove apache2 -y > /dev/null 2>&1
+
+apt install -y nginx php8.1-fpm php8.1-curl php8.1-mbstring php8.1-xml php8.1-sqlite3 unzip certbot python3-certbot-nginx
+
+echo "[OK] Dependencias instaladas"
+
+echo "[INFO] Buscando ZIP..."
+
+ZIP=$(ls /root/paineldtunnel*.zip 2>/dev/null | head -n1)
+
+if [ -z "$ZIP" ]; then
+    echo "No se encontró el ZIP del panel en /root"
+    exit
+fi
+
+echo "[OK] ZIP encontrado: $ZIP"
+
+rm -rf $WEBROOT/*
+unzip $ZIP -d $WEBROOT > /dev/null
+
+mkdir -p $WEBROOT/db
+
+chown -R www-data:www-data $WEBROOT
+chmod -R 755 $WEBROOT
+chmod 777 $WEBROOT/database $WEBROOT/db
+
+systemctl enable php8.1-fpm
+systemctl start php8.1-fpm
+
+echo "[INFO] Configurando Nginx..."
+
+SERVER_NAME=${DOMAIN:-_}
+
+cat > /etc/nginx/sites-available/default <<EOF
+server {
+    listen 80;
+    server_name $SERVER_NAME;
+    root $WEBROOT;
+    index index.php;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+    }
+}
+EOF
+
+systemctl restart nginx
+
+if [ ! -z "$DOMAIN" ] && [ ! -z "$EMAIL" ]; then
+    certbot --nginx -d $DOMAIN -d www.$DOMAIN --non-interactive --agree-tos -m $EMAIL
+fi
+
+IP=$(hostname -I | awk '{print $1}')
+
+echo ""
+echo "======================================"
+echo " INSTALACION COMPLETA"
+echo "======================================"
+
+if [ ! -z "$DOMAIN" ]; then
+echo "Panel: https://$DOMAIN"
+else
+echo "Panel: http://$IP"
+fi
